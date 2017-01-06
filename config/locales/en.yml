@@ -1,0 +1,19 @@
+en:
+  project_module_plugin_supply: Plugin Supply
+  
+  permission_view_clients: View clients
+  permission_edit_clients: Edit client info
+  
+  permission_view_products: View products
+  permission_edit_products: Edit product info
+  
+  label_clients: Client
+  label_clients_new: New client
+  label_clients_plural: Clients
+  
+  label_products: Product
+  label_products_new: New product
+  label_products_plural: Products
+  
+  field_descr: Description
+  field_product_image: Product image
