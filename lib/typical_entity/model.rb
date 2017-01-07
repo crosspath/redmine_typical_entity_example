@@ -1,6 +1,11 @@
 module TypicalEntity
   module Model
     class << self
+      # Usage:
+      # class MyModel < ActiveRecord::Base
+      #   include TypicalEntity::Model
+      #   typical_features :attachments, :watchers
+      # end
       def typical_features(*args)
         class_eval do
           include ::Redmine::I18n
@@ -23,173 +28,53 @@ module TypicalEntity
         end
       end # typical_features
       
-      def notify_on(*args)
+      # Usage:
+      # class MyModel < ActiveRecord::Base
+      #   include TypicalEntity::Model
+      #   notify_on create: -> { User.where(admin: true) }, update: :notified_users
+      #   def notified_users
+      #     filter_active_notified_users([author] + watchers)
+      #   end
+      # end
+      def notify_on(events = {})
         class_eval do
-          if args.include? :create
-            after_create :send_notification
-          end
+          events.each do |event, fn_notified_users|
+            case event
+            when :create
+              method_name = define_notification_method('added', fn_notified_users)
+              after_create method_name
+            when :update
+              method_name = define_notification_method('updated', fn_notified_users)
+              after_update method_name
+            else
+              raise StandardError, "Unsupported notification event: #{event} (#{self.name})"
+            end
+          end # events.each
           
-          def notified_users
-            # array of Users
+          def filter_active_notified_users(notified)
+            notified.uniq.select { |u| u.active? && u.notify_about?(self) }
           end
-          
-          def recipients
-            notified_users.map(&:mail)
-          end
+          # TODO: Currently`notify_about?` cares about Issue and News only 
+          # or it allows all / denies all notifications.
           
           private
           
-          def send_notification
-            # Example:
-            # if notify? && Setting.notified_events.include?('issue_added')
-            #   Mailer.deliver_issue_add(self)
-            # end
+          # Accepts method name for `notified_users` list or block/Proc that returns `notified_users` list.
+          def define_notification_method(event, fn_notified_users)
+            notified_event = "#{self.class.name.underscore}_#{event}"
+            Redmine::Notifiable.add(notified_event)
+            
+            define_method "send_notification_#{event}" do
+              users = fn_notified_users.respond_to?(:call) ? fn_notified_users.call : send(fn_notified_users)
+              if notify? && Setting.notified_events.include?(notified_event)
+                Mailer.send("deliver_#{notified_event}", self, users)
+              end
+            end
           end
         end
       end # notify_on
     end
-    
-    module AttachmentsModule
-      def self.included(base)
-        base.class_eval do
-          acts_as_attachable after_add: :attachment_added, after_remove: :attachment_removed
-          
-          attr_accessor :deleted_attachment_ids
-          
-          safe_attributes 'deleted_attachment_ids', if: ->(obj, user) { obj.attachments_deletable?(user) }
-          
-          def deleted_attachment_ids
-            Array(@deleted_attachment_ids).map(&:to_i)
-          end
-          
-          def delete_selected_attachments
-            if deleted_attachment_ids.present?
-              objects = attachments.where(id: deleted_attachment_ids.map(&:to_i))
-              attachments.delete(objects)
-            end
-          end
-
-          def attachment_added(attachment)
-            attachment_action(attachment) do
-              current_journal.journalize_attachment(attachment, :added)
-            end
-          end
-
-          def attachment_removed(attachment)
-            attachment_action(attachment) do
-              current_journal.journalize_attachment(attachment, :removed)
-              current_journal.save
-            end
-          end
-          
-          private
-          
-          def attachment_action(attachment, &block)
-            if respond_to?(:current_journal) && current_journal && !attachment.new_record?
-              block.call
-            end
-          end
-        end
-      end
-    end
-    
-    module JournalsModule
-      def self.included(base)
-        base.class_eval do
-          has_many :journals, as: :journalized, dependent: :destroy, inverse_of: :journalized
-          has_many :visible_journals, -> { scope_visible_journals(self) }, class_name: 'Journal', as: :journalized
-          
-          attr_reader :current_journal
-          delegate :notes, :notes=, :private_notes, :private_notes=, to: :current_journal, allow_nil: true
-          
-          safe_attributes 'notes', if: ->(obj, user) { obj.notes_addable?(user) }
-
-          def init_journal(user, notes = "")
-            @current_journal ||= Journal.new(journalized: self, user: user, notes: notes)
-          end
-
-          def current_journal
-            @current_journal
-          end
-          
-          def journalized_attribute_names
-            Issue.column_names - %w(id created_at updated_at)
-          end
-          
-          def last_journal_id
-            new_record? ? nil : journals.maximum(:id)
-          end
-          
-          def journals_after(journal_id)
-            journals_table = Journal.table_name
-            scope = journals.reorder("#{journals_table}.id ASC")
-            scope = scope.where("#{journals_table}.id > ?", journal_id.to_i) if journal_id.present?
-            scope
-          end
-  
-          private
-          
-          def self.scope_visible_journals(collection)
-            collection
-          end
-          
-          def create_journal
-            current_journal.save if current_journal
-          end
-            
-          def notes_addable?(user = User.current)
-            if respond_to?(:project)
-              user.allowed_to?(:add_issue_notes, project)
-            else
-              raise "Add `project` to class instance (belongs_to :project) or redefine this method. " +
-                  "Also, it'll be good to use custom permission, not `add_issue_notes`."
-            end
-          end
-        end
-      end
-    end
-    
-    module PrivateJournalsModule
-      def self.included(base)
-        base.class_eval do
-          safe_attributes 'private_notes',
-            if: ->(obj, user) { obj.new_record? && obj.private_notes_addable?(user) }
-
-          private
-          
-          def self.scope_visible_journals(collection)
-            collection.where(["(#{Journal.table_name}.private_notes = ? OR (#{Project.allowed_to_condition(User.current, :view_private_notes)}))", false])
-          end
-          
-          def private_notes_addable?(user = User.current)
-            if respond_to?(:project)
-              user.allowed_to?(:set_notes_private, project)
-            else
-              raise "Add `project` to class instance (belongs_to :project) or redefine this method."
-            end
-          end
-        end
-      end
-    end
-    
-    module WatchersModule
-      def self.included(base)
-        base.class_eval do
-          acts_as_watchable
-          
-          safe_attributes 'watcher_user_ids',
-            :if => lambda {|issue, user| obj.new_record? && obj.watchable?(user) }
-          
-          def watchable?(user = User.current)
-            if respond_to?(:project)
-              user.allowed_to?(:add_issue_watchers, project)
-            else
-              raise "Add `project` to class instance (belongs_to :project) or redefine this method. " +
-                  "Also, it'll be good to use custom permission, not `add_issue_watchers`."
-            end
-          end
-        end
-      end
-    end
-  end
+  end # module Model
 end
+
+Dir[File.join(File.dirname(__FILE__), 'model_modules', '*.rb')].each { |x| require x }
