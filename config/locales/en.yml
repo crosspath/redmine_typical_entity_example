@@ -7,6 +7,10 @@ en:
   permission_view_products: View products
   permission_edit_products: Edit product info
   
+  # for custom fields
+  label_client: Client
+  label_product: Product
+  
   label_clients: Client
   label_clients_new: New client
   label_clients_plural: Clients
