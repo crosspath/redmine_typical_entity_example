@@ -1,7 +1,4 @@
 resources :projects do
-  resources :clients, only: :index
-  resources :products, only: :index
+  resources :clients
+  resources :products
 end
-
-resources :clients
-resources :products

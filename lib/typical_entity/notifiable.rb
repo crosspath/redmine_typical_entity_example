@@ -2,7 +2,7 @@ ActionDispatch::Callbacks.to_prepare do
   Redmine::Notifiable.class_eval do
     class << self
       # Replace standard behaviour to API-like.
-      alias :old_all, :all
+      alias :old_all :all
       def all
         @@notifications
       end
@@ -14,7 +14,8 @@ ActionDispatch::Callbacks.to_prepare do
       def add_standard_notifications
         @@notifications = old_all
       end
-      add_standard_notifications
     end
+    
+    add_standard_notifications
   end
 end
