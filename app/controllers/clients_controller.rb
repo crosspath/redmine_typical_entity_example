@@ -4,6 +4,7 @@ class ClientsController < ApplicationController
   # => find_model_objects
   # => build_new_model_object_from_params
   # => actions (index, show, edit, ...)
+  # => link_to_object
   
   before_action :find_optional_project
   before_action :find_model_object, only: [:show, :edit, :update]
@@ -19,4 +20,8 @@ class ClientsController < ApplicationController
   helper :watchers
   
   model_object Client
+  
+  def link_to_object(object = @object)
+    view_context.link_to("##{object.id}", default_object_path(object), title: object.name)
+  end
 end

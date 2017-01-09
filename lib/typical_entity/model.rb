@@ -1,6 +1,6 @@
 module TypicalEntity
   module Model
-    class << self
+    module ClassMethods
       # Usage:
       # class MyModel < ActiveRecord::Base
       #   include TypicalEntity::Model
@@ -38,6 +38,22 @@ module TypicalEntity
       # end
       def notify_on(events = {})
         class_eval do
+          class << self
+            # Accepts method name for `notified_users` list or block/Proc that returns `notified_users` list.
+            def define_notification_method(event, fn_notified_users)
+              notified_event = "#{self.class.name.underscore}_#{event}"
+              Redmine::Notifiable.add(notified_event)
+              
+              define_method "send_notification_#{event}" do
+                users = fn_notified_users.respond_to?(:call) ? fn_notified_users.call : send(fn_notified_users)
+                if notify? && Setting.notified_events.include?(notified_event)
+                  Mailer.send("deliver_#{notified_event}", self, users)
+                end
+              end
+            end
+            private :define_notification_method
+          end
+          
           events.each do |event, fn_notified_users|
             case event
             when :create
@@ -51,28 +67,23 @@ module TypicalEntity
             end
           end # events.each
           
-          def filter_active_notified_users(notified)
-            notified.uniq.select { |u| u.active? && u.notify_about?(self) }
-          end
-          # TODO: Currently`notify_about?` cares about Issue and News only 
-          # or it allows all / denies all notifications.
-          
-          private
-          
-          # Accepts method name for `notified_users` list or block/Proc that returns `notified_users` list.
-          def define_notification_method(event, fn_notified_users)
-            notified_event = "#{self.class.name.underscore}_#{event}"
-            Redmine::Notifiable.add(notified_event)
-            
-            define_method "send_notification_#{event}" do
-              users = fn_notified_users.respond_to?(:call) ? fn_notified_users.call : send(fn_notified_users)
-              if notify? && Setting.notified_events.include?(notified_event)
-                Mailer.send("deliver_#{notified_event}", self, users)
-              end
-            end
-          end
+          include NotifyMethods
         end
       end # notify_on
+    end
+    
+    module NotifyMethods
+      def filter_active_notified_users(notified)
+        notified.uniq.select { |u| u.active? && u.notify_about?(self) }
+      end
+      # TODO: Currently`notify_about?` cares about Issue and News only 
+      # or it allows all / denies all notifications.
+    end
+    
+    def self.included(base)
+      base.class_eval do
+        extend ClassMethods
+      end
     end
   end # module Model
 end

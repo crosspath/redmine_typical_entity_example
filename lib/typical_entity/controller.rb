@@ -1,9 +1,13 @@
 module TypicalEntity
   module Controller
-    helper :queries
-    include QueriesHelper
-    helper :sort
-    include SortHelper
+    def self.included(base)
+      base.class_eval do
+        helper :queries
+        include QueriesHelper
+        helper :sort
+        include SortHelper
+      end
+    end
     
     # before_action:
     
@@ -48,7 +52,7 @@ module TypicalEntity
 
         respond_to { |format| render_index(format) }
       else
-        render_index_error
+        respond_to { |format| render_error_index(format) }
       end
     rescue ActiveRecord::RecordNotFound
       render_404
@@ -61,6 +65,21 @@ module TypicalEntity
     
     def new
       respond_to { |format| render_new(format) }
+    end
+    
+    def create
+      return unless request.post?
+      prepare_object_create
+      
+      if @object.save
+        respond_to { |format| render_create(format) }
+      else
+        respond_to { |format| render_error_create(format) }
+      end
+    end
+    
+    def edit
+      respond_to { |format| render_edit(format) }
     end
     
     # helper methods:
@@ -102,6 +121,7 @@ module TypicalEntity
     end
     
     def render_index(format)
+      raise if self.class.model_object.blank?
       model = self.class.model_object.name
       
       format.html { render action: 'index', layout: !request.xhr? }
@@ -125,12 +145,10 @@ module TypicalEntity
       end
     end
     
-    def render_index_error
-      respond_to do |format|
-        format.html { render action: 'index', layout: !request.xhr? }
-        format.any(:atom, :csv, :pdf) { head 422 }
-        format.api { render_validation_errors(@query) }
-      end
+    def render_error_index(format)
+      format.html { render action: 'index', layout: !request.xhr? }
+      format.any(:atom, :csv, :pdf) { head 422 }
+      format.api { render_validation_errors(@query) }
     end
     
     # Override it if you want to add statements to `show` action before render.
@@ -176,6 +194,42 @@ module TypicalEntity
     
     def render_new(format)
       format.html { render layout: !request.xhr? }
+      format.js
+    end
+    
+    def link_to_object(object = @object)
+      pkey = self.class.model_object.primary_key
+      view_context.link_to("##{object[pkey]}", default_object_path(object)) # third arg: {title: object.name}
+    end
+    
+    def prepare_object_create
+      if @object.respond_to? :save_attachments
+        obj_key = self.class.model_object.name.underscore
+        attachments = params[:attachments] || (params[obj_key] && params[obj_key][:uploads])
+        @object.save_attachments(attachments)
+      end
+    end
+    
+    def render_create(format)
+      format.html do
+        render_attachment_warning_if_needed(@object) if @object.respond_to? :attachments
+        flash[:notice] = l(:notice_successful_create, id: link_to_object)
+        redirect_back_or_default default_object_path
+      end
+      
+      format.js
+      
+      format.api { render action: 'show', status: :created, location: default_object_url }
+    end
+    
+    def render_error_create(format)
+      format.html { render action: 'new' }
+      format.js { render action: 'new' }
+      format.api { render_validation_errors(@object) }
+    end
+    
+    def render_edit(format)
+      format.html
       format.js
     end
   end
