@@ -82,6 +82,17 @@ module TypicalEntity
       respond_to { |format| render_edit(format) }
     end
     
+    def update
+      return unless request.post?
+      prepare_object_update
+      
+      if @object.save
+        respond_to { |format| render_update(format) }
+      else
+        respond_to { |format| render_error_update(format) }
+      end
+    end
+    
     # helper methods:
     
     private
@@ -121,27 +132,25 @@ module TypicalEntity
     end
     
     def render_index(format)
-      raise if self.class.model_object.blank?
-      model = self.class.model_object.name
-      
       format.html { render action: 'index', layout: !request.xhr? }
       
       format.api
       
       format.atom do
-        label = l("label_#{model.underscore}_plural")
+        raise if self.class.model_object.blank?
+        model_object = self.class.model_object
+        
+        label = l("label_#{model_object.name.underscore}_plural")
         render_feed(@objects, title: "#{@project || Setting.app_title}: #{label}")
       end
       
       format.csv  do
-        filename = "#{model.tableize}.csv"
         row_data = query_to_csv(@objects, @query, params[:csv])
-        send_data(row_data, type: 'text/csv; header=present', filename: filename)
+        send_data(row_data, type: 'text/csv; header=present', filename: export_file_name('csv'))
       end
       
       format.pdf  do
-        filename = "#{model.tableize}.pdf"
-        send_file_headers! type: 'application/pdf', filename: filename
+        send_file_headers! type: 'application/pdf', filename: export_file_name('pdf')
       end
     end
     
@@ -185,10 +194,20 @@ module TypicalEntity
       end
       
       format.pdf do
-        model_object = self.class.model_object
+        send_file_headers! type: 'application/pdf', filename: export_file_name('pdf')
+      end
+    end
+    
+    def export_file_name(ext)
+      model_object = self.class.model_object
+      if instance_variable_defined?(:@object) && @object # maybe, `instance_variable_defined?` is not needed
         file_name_parts = [model_object.name, @object[model_object.primary_key]]
-        file_name_parts.unshift(@project.identifier) if @object.respond_to?(:project)
-        send_file_headers! type: 'application/pdf', filename: "#{file_name_parts.join('-')}.pdf"
+        if @object.respond_to?(:project) && @object.project
+          file_name_parts.unshift(@object.project.identifier)
+        end
+        file_name_parts.join('-') + ".#{ext}"
+      else
+        model_object.tableize + ".#{ext}"
       end
     end
     
@@ -203,11 +222,13 @@ module TypicalEntity
     end
     
     def prepare_object_create
-      if @object.respond_to? :save_attachments
-        obj_key = self.class.model_object.name.underscore
-        attachments = params[:attachments] || (params[obj_key] && params[obj_key][:uploads])
-        @object.save_attachments(attachments)
-      end
+      object_save_attachments if @object.respond_to? :save_attachments
+    end
+    
+    def object_save_attachments
+      obj_key = self.class.model_object.name.underscore
+      attachments = params[:attachments] || (params[obj_key] && params[obj_key][:uploads])
+      @object.save_attachments(attachments)
     end
     
     def render_create(format)
@@ -231,6 +252,32 @@ module TypicalEntity
     def render_edit(format)
       format.html
       format.js
+    end
+    
+    def prepare_object_update
+      object_save_attachments if @object.respond_to? :save_attachments
+    end
+    
+    def render_update(format)
+      if @object.respond_to?(:current_journal) && !@object.current_journal.new_record?
+        flash[:notice] = l(:notice_successful_update)
+      end
+      
+      format.html do
+        render_attachment_warning_if_needed(@object) if @object.respond_to? :attachments
+        flash[:notice] = l(:notice_successful_create, id: link_to_object)
+        redirect_back_or_default default_object_path
+      end
+      
+      format.js
+      
+      format.api { render_api_ok }
+    end
+    
+    def render_error_update(format)
+      format.html { render action: 'edit' }
+      format.js { render action: 'edit' }
+      format.api { render_validation_errors(@object) }
     end
   end
 end
