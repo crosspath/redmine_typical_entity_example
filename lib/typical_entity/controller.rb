@@ -27,6 +27,17 @@ module TypicalEntity
     end
     
     def build_new_model_object_from_params
+      @object = self.class.model_object.new
+      update_model_object_from_params
+    end
+    
+    def update_model_object_from_params(object = @object, object_params = nil)
+      object_params ||= begin
+        obj_key = self.class.model_object.name.underscore
+        params[obj_key]
+      end
+      object.init_journal(User.current) if object.respond_to?(:journals)
+      object.safe_attributes = object_params if object.respond_to?(:safe_attributes=)
     end
     
     # actions:
@@ -69,9 +80,13 @@ module TypicalEntity
     
     def create
       return unless request.post?
-      prepare_object_create
       
-      if @object.save
+      saved = ActiveRecord::Base.transaction do
+        prepare_object_create
+        @object.save
+      end
+      
+      if saved
         respond_to { |format| render_create(format) }
       else
         respond_to { |format| render_error_create(format) }
@@ -84,12 +99,66 @@ module TypicalEntity
     
     def update
       return unless request.post?
-      prepare_object_update
       
-      if @object.save
+      saved = ActiveRecord::Base.transaction do
+        prepare_object_update
+        @object.save
+      end
+      
+      if saved
         respond_to { |format| render_update(format) }
       else
         respond_to { |format| render_error_update(format) }
+      end
+    end
+    
+    def destroy
+      raise ActiveRecord::RecordNotFound if @objects.empty?
+      
+      ActiveRecord::Base.transaction do
+        prepare_objects_destroy
+        @objects.each do |o|
+          begin
+            o.reload.destroy
+          rescue ::ActiveRecord::RecordNotFound # raised by #reload if request no longer exists
+            # nothing to do, object was already deleted
+          end
+        end
+      end
+      
+      respond_to { |format| render_destroy(format) }
+    end
+    
+    def bulk_edit
+      raise ActiveRecord::RecordNotFound if @objects.empty?
+      prepare_objects_bulk_edit
+      respond_to { |format| render_bulk_edit(format) }
+    end
+    
+    def bulk_update
+      raise ActiveRecord::RecordNotFound if @objects.empty?
+      obj_key = self.class.model_object.name.underscore
+      @objects.sort!
+      attributes = parse_params_for_bulk_update(params[obj_key])
+      @saved_objects = []
+      @unsaved_objects = []
+      
+      @objects.each do |object|
+        object.reload
+        update_model_object_from_params(object, attributes)
+        if object.save
+          @saved_objects << object
+        else
+          @unsaved_objects << object
+        end
+      end
+      
+      if unsaved_object_ids.empty?
+        flash[:notice] = l(:notice_successful_update)
+        redirect_back_or_default default_objects_path
+      else
+        bulk_edit
+        render action: 'bulk_edit' # нужен ли?
       end
     end
     
@@ -278,6 +347,35 @@ module TypicalEntity
       format.html { render action: 'edit' }
       format.js { render action: 'edit' }
       format.api { render_validation_errors(@object) }
+    end
+    
+    def prepare_objects_destroy
+      # for special cases like deleting relevant objects
+    end
+    
+    def render_destroy(format)
+      format.html { redirect_back_or_default default_objects_path }
+      format.api  { render_api_ok }
+    end
+    
+    def render_bulk_edit(format)
+      render layout: false if request.xhr?
+    end
+    
+    def prepare_objects_bulk_edit
+      obj_key = self.class.model_object.name.underscore
+      @objects.sort!
+      @notes = params[:notes]
+      
+      @custom_fields = if @objects.first.respond_to?(:editable_custom_fields)
+        editable_custom_fields = @objects.map{ |i|i.editable_custom_fields }.reduce(:&)
+        editable_custom_fields.select { |field| field.format.bulk_edit_supported }
+      else
+        @objects.first.available_custom_fields
+      end
+      
+      @object_params = params[obj_key] || {}
+      @object_params[:custom_field_values] ||= {}
     end
   end
 end
