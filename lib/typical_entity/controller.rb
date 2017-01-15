@@ -13,13 +13,9 @@ module TypicalEntity
     
     def find_model_objects
       model = self.class.model_object
-      @objects = if model
-        pkey = model.primary_key
-        model.where(pkey => params[pkey])
-      else
-        nil
-      end
-      if @objects.exist?
+      pkey = model && model.primary_key
+      @objects = (model && params[pkey].present?) ? model.where(pkey => params[pkey]) : nil
+      if @objects.present? || params[pkey].blank?
         self.instance_variable_set('@' + controller_name, @objects)
       else
         render_404
@@ -137,39 +133,42 @@ module TypicalEntity
     
     def bulk_update
       raise ActiveRecord::RecordNotFound if @objects.empty?
-      obj_key = self.class.model_object.name.underscore
-      @objects.sort!
-      attributes = parse_params_for_bulk_update(params[obj_key])
-      @saved_objects = []
-      @unsaved_objects = []
+      prepare_objects_bulk_update
       
-      @objects.each do |object|
-        object.reload
-        update_model_object_from_params(object, attributes)
-        if object.save
-          @saved_objects << object
-        else
-          @unsaved_objects << object
-        end
+      ActiveRecord::Base.transaction do
+        @objects.each { |object| update_object_in_bulk(object) }
       end
       
-      if unsaved_object_ids.empty?
-        flash[:notice] = l(:notice_successful_update)
-        redirect_back_or_default default_objects_path
-      else
-        bulk_edit
-        render action: 'bulk_edit' # нужен ли?
-      end
+      finish_bulk_update
+    end
+    
+    # these methods should be overriden
+    
+    def default_objects_path
+      raise NotImplementedError, "Not implemented method 'default_objects_path' in #{self.class.name}"
+    end
+
+    def default_object_path(object)
+      raise NotImplementedError, "Not implemented method 'default_object_path' in #{self.class.name}"
+    end
+
+    def default_object_url(object)
+      raise NotImplementedError, "Not implemented method 'default_object_url' in #{self.class.name}"
     end
     
     # helper methods:
+    
+    def link_to_object(object = @object)
+      pkey = self.class.model_object.primary_key
+      view_context.link_to("##{object[pkey]}", default_object_path(object)) # third arg: {title: object.name}
+    end
     
     private
     
     def query_class
       @query_class ||= begin
         raise if self.class.model_object.blank?
-        (self.class.model_object + 'Query').constantize
+        (self.class.model_object.name + 'Query').constantize
       rescue => e
         raise StandardError, "Can't find query class for #{controller_name}"
       end
@@ -182,6 +181,21 @@ module TypicalEntity
     def params_for_query_objects
       {order: sort_clause, offset: @offset, limit: @limit}
     end
+    
+    def export_file_name(ext)
+      model_object = self.class.model_object
+      if instance_variable_defined?(:@object) && @object # maybe, `instance_variable_defined?` is not needed
+        file_name_parts = [model_object.name, @object[model_object.primary_key]]
+        if @object.respond_to?(:project) && @object.project
+          file_name_parts.unshift(@object.project.identifier)
+        end
+        file_name_parts.join('-') + ".#{ext}"
+      else
+        model_object.tableize + ".#{ext}"
+      end
+    end
+    
+    # these methods are used in actions:
     
     def prepare_query_index
       case params[:format]
@@ -267,27 +281,9 @@ module TypicalEntity
       end
     end
     
-    def export_file_name(ext)
-      model_object = self.class.model_object
-      if instance_variable_defined?(:@object) && @object # maybe, `instance_variable_defined?` is not needed
-        file_name_parts = [model_object.name, @object[model_object.primary_key]]
-        if @object.respond_to?(:project) && @object.project
-          file_name_parts.unshift(@object.project.identifier)
-        end
-        file_name_parts.join('-') + ".#{ext}"
-      else
-        model_object.tableize + ".#{ext}"
-      end
-    end
-    
     def render_new(format)
       format.html { render layout: !request.xhr? }
       format.js
-    end
-    
-    def link_to_object(object = @object)
-      pkey = self.class.model_object.primary_key
-      view_context.link_to("##{object[pkey]}", default_object_path(object)) # third arg: {title: object.name}
     end
     
     def prepare_object_create
@@ -304,12 +300,12 @@ module TypicalEntity
       format.html do
         render_attachment_warning_if_needed(@object) if @object.respond_to? :attachments
         flash[:notice] = l(:notice_successful_create, id: link_to_object)
-        redirect_back_or_default default_object_path
+        redirect_back_or_default default_object_path(@object)
       end
       
       format.js
       
-      format.api { render action: 'show', status: :created, location: default_object_url }
+      format.api { render action: 'show', status: :created, location: default_object_url(@object) }
     end
     
     def render_error_create(format)
@@ -335,7 +331,7 @@ module TypicalEntity
       format.html do
         render_attachment_warning_if_needed(@object) if @object.respond_to? :attachments
         flash[:notice] = l(:notice_successful_create, id: link_to_object)
-        redirect_back_or_default default_object_path
+        redirect_back_or_default default_object_path(@object)
       end
       
       format.js
@@ -376,6 +372,34 @@ module TypicalEntity
       
       @object_params = params[obj_key] || {}
       @object_params[:custom_field_values] ||= {}
+    end
+    
+    def prepare_objects_bulk_update
+      obj_key = self.class.model_object.name.underscore
+      @objects.sort!
+      @attributes = parse_params_for_bulk_update(params[obj_key])
+      @saved_objects = []
+      @unsaved_objects = []
+    end
+    
+    def update_object_in_bulk(object)
+      object.reload
+      update_model_object_from_params(object, @attributes)
+      if object.save
+        @saved_objects << object
+      else
+        @unsaved_objects << object
+      end
+    end
+    
+    def finish_bulk_update
+      if @unsaved_objects.empty?
+        flash[:notice] = l(:notice_successful_update)
+        redirect_back_or_default default_objects_path
+      else
+        bulk_edit
+        render action: 'bulk_edit' # нужен ли?
+      end
     end
   end
 end
