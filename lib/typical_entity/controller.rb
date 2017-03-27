@@ -32,7 +32,7 @@ module TypicalEntity
         obj_key = self.class.model_object.name.underscore
         params[obj_key]
       end
-      object.init_journal(User.current) if object.respond_to?(:journals)
+      object.init_journal(::User.current) if object.respond_to?(:journals)
       object.safe_attributes = object_params if object.respond_to?(:safe_attributes=)
     end
     
@@ -52,7 +52,7 @@ module TypicalEntity
         prepare_query_index
 
         @object_count = @query.object_count
-        @object_pages = Paginator.new @object_count, @limit, params['page']
+        @object_pages = Redmine::Pagination::Paginator.new @object_count, @limit, params['page']
         @offset ||= @object_pages.offset
         @objects = @query.objects(params_for_query_objects)
         @object_count_by_group = @query.object_count_by_group
@@ -61,7 +61,7 @@ module TypicalEntity
       else
         respond_to { |format| render_error_index(format) }
       end
-    rescue ActiveRecord::RecordNotFound
+    rescue ::ActiveRecord::RecordNotFound
       render_404
     end
     
@@ -77,7 +77,7 @@ module TypicalEntity
     def create
       return unless request.post?
       
-      saved = ActiveRecord::Base.transaction do
+      saved = ::ActiveRecord::Base.transaction do
         prepare_object_create
         @object.save
       end
@@ -96,7 +96,7 @@ module TypicalEntity
     def update
       return unless request.post?
       
-      saved = ActiveRecord::Base.transaction do
+      saved = ::ActiveRecord::Base.transaction do
         prepare_object_update
         @object.save
       end
@@ -109,9 +109,9 @@ module TypicalEntity
     end
     
     def destroy
-      raise ActiveRecord::RecordNotFound if @objects.empty?
+      raise ::ActiveRecord::RecordNotFound if @objects.empty?
       
-      ActiveRecord::Base.transaction do
+      ::ActiveRecord::Base.transaction do
         prepare_objects_destroy
         @objects.each do |o|
           begin
@@ -126,16 +126,16 @@ module TypicalEntity
     end
     
     def bulk_edit
-      raise ActiveRecord::RecordNotFound if @objects.empty?
+      raise ::ActiveRecord::RecordNotFound if @objects.empty?
       prepare_objects_bulk_edit
       respond_to { |format| render_bulk_edit(format) }
     end
     
     def bulk_update
-      raise ActiveRecord::RecordNotFound if @objects.empty?
+      raise ::ActiveRecord::RecordNotFound if @objects.empty?
       prepare_objects_bulk_update
       
-      ActiveRecord::Base.transaction do
+      ::ActiveRecord::Base.transaction do
         @objects.each { |object| update_object_in_bulk(object) }
       end
       
@@ -145,15 +145,15 @@ module TypicalEntity
     # these methods should be overriden
     
     def default_objects_path
-      raise NotImplementedError, "Not implemented method 'default_objects_path' in #{self.class.name}"
+      raise ::NotImplementedError, "Not implemented method 'default_objects_path' in #{self.class.name}"
     end
 
     def default_object_path(object)
-      raise NotImplementedError, "Not implemented method 'default_object_path' in #{self.class.name}"
+      raise ::NotImplementedError, "Not implemented method 'default_object_path' in #{self.class.name}"
     end
 
     def default_object_url(object)
-      raise NotImplementedError, "Not implemented method 'default_object_url' in #{self.class.name}"
+      raise ::NotImplementedError, "Not implemented method 'default_object_url' in #{self.class.name}"
     end
     
     # helper methods:
@@ -170,7 +170,7 @@ module TypicalEntity
         raise if self.class.model_object.blank?
         (self.class.model_object.name + 'Query').constantize
       rescue => e
-        raise StandardError, "Can't find query class for #{controller_name}"
+        raise ::StandardError, "Can't find query class for #{controller_name}"
       end
     end
     
@@ -200,12 +200,12 @@ module TypicalEntity
     def prepare_query_index
       case params[:format]
           when 'csv', 'pdf'
-            @limit = Setting.issues_export_limit.to_i
+            @limit = ::Setting.issues_export_limit.to_i
             if params[:columns] == 'all'
               @query.column_names = @query.available_inline_columns.map(&:name)
             end
           when 'atom'
-            @limit = Setting.feeds_limit.to_i
+            @limit = ::Setting.feeds_limit.to_i
           when 'xml', 'json'
             @offset, @limit = api_offset_and_limit
             @query.column_names = %w(name)
@@ -224,7 +224,7 @@ module TypicalEntity
         model_object = self.class.model_object
         
         label = l("label_#{model_object.name.underscore}_plural")
-        render_feed(@objects, title: "#{@project || Setting.app_title}: #{label}")
+        render_feed(@objects, title: "#{@project || ::Setting.app_title}: #{label}")
       end
       
       format.csv  do
@@ -250,7 +250,7 @@ module TypicalEntity
     
     def prepare_journals_show
       journals = @object.journals
-      user = User.current
+      user = ::User.current
       
       @journals = journals.preload(:details).preload(user: :email_address).reorder(:created_on, :id).to_a
       @journals.each_with_index { |j, i| j.indice = i + 1 }
@@ -259,7 +259,7 @@ module TypicalEntity
         @journals.reject!(&:private_notes?)
       end
       
-      Journal.preload_journals_details_custom_fields(@journals)
+      ::Journal.preload_journals_details_custom_fields(@journals)
       @journals.select! { |journal| journal.notes? || journal.visible_details.any? }
       @journals.reverse! if user.wants_comments_in_reverse_order?
     end

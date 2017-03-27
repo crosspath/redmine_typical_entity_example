@@ -34,6 +34,68 @@ module TypicalEntity
       add_associations_custom_fields_filters(*self.class.queried_class.reflections.keys)
     end
     
+    def object_count
+      default_scope_object.count
+    #rescue ::ActiveRecord::StatementInvalid => e
+    #  raise ::Query::StatementInvalid.new(e.message)
+    end
+    
+    def project_statement
+      if self.class.queried_class.reflections.key?('project')
+        super
+      else
+        nil
+      end
+    end
+    
+    # example: self.class.queried_class.visible
+    def default_scope_object
+      self.class.queried_class.where(statement)
+    end
+
+    # Returns the object count by group or nil if query is not grouped
+    def object_count_by_group
+      return nil unless grouped?
+      
+      r = begin
+          # Rails3 will raise an (unexpected) RecordNotFound if there's only a nil group value
+          default_scope_object.
+            joins(joins_for_order_statement(group_by_statement)).
+            group(group_by_statement).
+            count
+        rescue ActiveRecord::RecordNotFound
+          {nil => object_count}
+        end
+      
+      c = group_by_column
+      if c.is_a?(QueryCustomFieldColumn)
+        r = r.keys.reduce({}) { |h, k| h[c.custom_field.cast_value(k)] = r[k]; h }
+      end
+
+      r
+    #rescue ::ActiveRecord::StatementInvalid => e
+    #  raise ::Query::StatementInvalid.new(e.message)
+    end
+
+    # Returns the objects
+    # Valid options are :order, :offset, :limit, :include, :conditions
+    def objects(options={})
+      order_option = [group_by_sort_order, options[:order]].flatten.reject(&:blank?)
+
+      scope = default_scope_object.
+          includes(((@joins_values || []) + (options[:include] || [])).uniq).
+          where(options[:conditions]).
+          order(order_option).
+          joins(joins_for_order_statement(order_option.join(','))).
+          limit(options[:limit]).
+          offset(options[:offset]).
+          preload(:custom_values)
+
+      scope.all
+    #rescue ::ActiveRecord::StatementInvalid => e
+    #  raise ::Query::StatementInvalid.new(e.message)
+    end
+    
     def self.included(base)
       base.class_eval do
         class << self
